@@ -1022,7 +1022,7 @@ void CStudioModelRenderer::StudioSetupBones()
 					m_vCamAngles[i] = std::lerp(m_vPrevCamAngles[i], m_vNewCamAngles[i], float(m_clTime - m_clOldTime) * 20.0f);
 				}
 
-				gEngfuncs.Con_Printf("%f %f %f\n", m_vCamAngles.x, m_vCamAngles.y, m_vCamAngles.z);
+			//	gEngfuncs.Con_Printf("%f %f %f\n", m_vCamAngles.x, m_vCamAngles.y, m_vCamAngles.z);
 			}
 		}
 	}
