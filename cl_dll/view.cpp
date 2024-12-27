@@ -20,6 +20,13 @@
 #include "hltv.h"
 #include "Exports.h"
 
+#include "studio.h"
+#include "com_model.h"
+#include "StudioModelRenderer.h"
+#include "GameStudioModelRenderer.h"
+
+extern CGameStudioModelRenderer g_StudioRenderer;
+
 int CL_IsThirdPerson();
 void CL_CameraOffset(float* ofs);
 
@@ -694,6 +701,9 @@ void V_CalcNormalRefdef(struct ref_params_s* pparams)
 	VectorAdd(pparams->viewangles, (float*)&ev_punchangle, pparams->viewangles);
 
 	V_DropPunchAngle(pparams->frametime, (float*)&ev_punchangle);
+
+	VectorAdd(pparams->viewangles, (float*)&g_StudioRenderer.m_vCamAngles, pparams->viewangles);
+	
 
 	// smooth out stair step ups
 #if 1

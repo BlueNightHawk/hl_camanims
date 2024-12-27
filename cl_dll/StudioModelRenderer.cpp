@@ -21,6 +21,8 @@
 #include "StudioModelRenderer.h"
 #include "GameStudioModelRenderer.h"
 
+#include <algorithm>
+
 extern cvar_t* tfc_newmodels;
 
 extern extra_player_info_t g_PlayerExtraInfo[MAX_PLAYERS_HUD + 1];
@@ -61,6 +63,8 @@ void CStudioModelRenderer::Init()
 	m_plighttransform = (float(*)[MAXSTUDIOBONES][3][4])IEngineStudio.StudioGetLightTransform();
 	m_paliastransform = (float(*)[3][4])IEngineStudio.StudioGetAliasTransform();
 	m_protationmatrix = (float(*)[3][4])IEngineStudio.StudioGetRotationMatrix();
+
+	InitCamAnimInfo();
 }
 
 /*
@@ -99,6 +103,7 @@ CStudioModelRenderer::CStudioModelRenderer()
 */
 CStudioModelRenderer::~CStudioModelRenderer()
 {
+	m_CamInfos.clear();
 }
 
 /*
@@ -973,6 +978,7 @@ void CStudioModelRenderer::StudioSetupBones()
 
 		if (parent == -1)
 		{
+			MatrixCopy(bonematrix, m_basetransform[i]);
 			if (0 != IEngineStudio.IsHardware())
 			{
 				ConcatTransforms((*m_protationmatrix), bonematrix, (*m_pbonetransform)[i]);
@@ -992,8 +998,32 @@ void CStudioModelRenderer::StudioSetupBones()
 		}
 		else if (parent >= 0 && parent < m_pStudioHeader->numbones)
 		{
+			ConcatTransforms(m_basetransform[parent], bonematrix, m_basetransform[i]);
+
 			ConcatTransforms((*m_pbonetransform)[parent], bonematrix, (*m_pbonetransform)[i]);
 			ConcatTransforms((*m_plighttransform)[parent], bonematrix, (*m_plighttransform)[i]);
+		}
+
+		if ((m_pCurrentEntity == IEngineStudio.GetViewEntity() || m_bCalcBaseAngles) && m_pCurrentCamInfo && m_pCurrentCamInfo->bone == i)
+		{
+			if (m_bCalcBaseAngles)
+				MatrixAngles(m_basetransform[i], m_vBaseCamAngles);
+			else
+			{
+				m_vPrevCamAngles = m_vCamAngles;
+
+				MatrixAngles(m_basetransform[i], m_vNewCamAngles);
+
+				m_vNewCamAngles = m_vNewCamAngles - m_vBaseCamAngles;
+				m_vNewCamAngles = m_vNewCamAngles * m_pCurrentCamInfo->flScale;
+
+				for (size_t i = 0; i < 3; i++)
+				{
+					m_vCamAngles[i] = std::lerp(m_vPrevCamAngles[i], m_vNewCamAngles[i], float(m_clTime - m_clOldTime) * 20.0f);
+				}
+
+				gEngfuncs.Con_Printf("%f %f %f\n", m_vCamAngles.x, m_vCamAngles.y, m_vCamAngles.z);
+			}
 		}
 	}
 }
@@ -1121,7 +1151,6 @@ bool CStudioModelRenderer::StudioDrawModel(int flags)
 	alight_t lighting;
 	Vector dir;
 
-	m_pCurrentEntity = IEngineStudio.GetCurrentEntity();
 	IEngineStudio.GetTimes(&m_nFrameCount, &m_clTime, &m_clOldTime);
 	IEngineStudio.GetViewInfo(m_vRenderOrigin, m_vUp, m_vRight, m_vNormal);
 	IEngineStudio.GetAliasScale(&m_fSoftwareXScale, &m_fSoftwareYScale);
@@ -1162,6 +1191,8 @@ bool CStudioModelRenderer::StudioDrawModel(int flags)
 	m_pStudioHeader = (studiohdr_t*)IEngineStudio.Mod_Extradata(m_pRenderModel);
 	IEngineStudio.StudioSetHeader(m_pStudioHeader);
 	IEngineStudio.SetRenderModel(m_pRenderModel);
+
+	UpdateCamInfo();
 
 	StudioSetUpTransform(false);
 
@@ -1736,4 +1767,114 @@ void CStudioModelRenderer::StudioRenderFinal()
 	{
 		StudioRenderFinal_Software();
 	}
+}
+
+/*
+====================
+InitCamAnimInfo
+
+Read caminfo.txt and grab model name, camera bone and animation scale
+
+caminfo.txt example:
+
+// model		// bone		// scale
+"v_357.mdl"		1			1.0
+====================
+*/
+void CStudioModelRenderer::InitCamAnimInfo()
+{
+	static char token[128];
+	char *pfile, *afile;
+
+	m_CamInfos.clear();
+
+	pfile = afile = reinterpret_cast<char*>(gEngfuncs.COM_LoadFile("caminfo.txt", 5, nullptr));
+	if (!pfile)
+	{
+		gEngfuncs.Con_Printf("Unable to load caminfo.txt!\n");
+		return;
+	}
+
+	while (pfile = gEngfuncs.COM_ParseFile(pfile, token))
+	{
+		std::string name = token;
+		caminfo_s inf;
+
+		pfile = gEngfuncs.COM_ParseFile(pfile, token);
+		if (!pfile)
+			break;
+		inf.bone = atoi(token);
+	
+		pfile = gEngfuncs.COM_ParseFile(pfile, token);
+		if (!pfile)
+			break;
+		inf.flScale = atof(token);
+
+		m_CamInfos.insert(std::make_pair(name, inf));
+	}
+
+	gEngfuncs.COM_FreeFile(afile);
+}
+
+/*
+====================
+InitCamAnimInfo
+
+====================
+*/
+void CStudioModelRenderer::UpdateCamInfo()
+{
+	if (m_bCalcBaseAngles)
+		return;
+
+	if (m_pCurrentEntity != IEngineStudio.GetViewEntity())
+		return;
+
+	if (m_CamInfos.size() == 0 || !m_pCurrentEntity->model || !m_pRenderModel)
+	{
+		m_pCurrentCamInfo = nullptr;
+		m_pCachedViewModel = nullptr;
+
+		m_vCamAngles = m_vPrevCamAngles = m_vNewCamAngles = vec3_origin;
+		return;
+	}
+
+	if (m_pRenderModel == m_pCachedViewModel)
+		return;
+
+	std::string name = m_pRenderModel->name;
+	name.erase(0,7);
+
+	auto it = m_CamInfos.find(name);
+
+	if (it != m_CamInfos.end())
+	{
+		m_pCurrentCamInfo = &it->second;
+
+		// Calculate base angles for camanims
+		// Without rendering anything
+		cl_entity_t temp = *IEngineStudio.GetViewEntity();
+		temp.curstate.sequence = 0;
+		temp.curstate.animtime = gEngfuncs.GetClientTime();
+		temp.curstate.frame = 0.0f;
+
+		m_pCurrentEntity = &temp;
+
+		m_bCalcBaseAngles = true;
+		StudioDrawModel(0);
+		m_bCalcBaseAngles = false;
+
+		m_pCurrentEntity = IEngineStudio.GetViewEntity();
+		m_pRenderModel = m_pCurrentEntity->model;
+		m_pStudioHeader = (studiohdr_t*)IEngineStudio.Mod_Extradata(m_pRenderModel);
+		IEngineStudio.StudioSetHeader(m_pStudioHeader);
+		IEngineStudio.SetRenderModel(m_pRenderModel);
+	}
+	else
+	{
+		m_pCurrentCamInfo = nullptr;
+		m_vCamAngles = vec3_origin;
+	}
+
+	m_pCachedViewModel = m_pRenderModel;
 }

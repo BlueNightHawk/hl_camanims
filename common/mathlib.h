@@ -118,3 +118,10 @@ float anglemod(float a);
 																   ((p)->dist >= (emaxs)[(p)->type]) ? 2   \
 																									 : 3)) \
 					 : BoxOnPlaneSide((emins), (emaxs), (p)))
+
+void MatrixGetColumn(const float in[3][4], int column, Vector& out);
+void MatrixSetColumn(const Vector& in, int column, float out[3][4]);
+void MatrixAngles(const float matrix[3][4], Vector& angles, Vector& position);
+void MatrixAngles(const float matrix[3][4], float* angles);
+
+void VectorAngles(const Vector& forward, const Vector& pseudoup, Vector& angles);
